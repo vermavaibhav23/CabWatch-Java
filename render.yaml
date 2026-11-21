@@ -1,0 +1,59 @@
+# Creates NEW resources only. Review Render's price estimate before deployment.
+# Paid infrastructure is intentional: a durable Kafka broker is not a free web process.
+services:
+  - type: web
+    name: cabwatch-java-api
+    runtime: docker
+    region: singapore
+    plan: 1c-2g
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /actuator/health/readiness
+    autoDeployTrigger: "off"
+    envVars:
+      - key: OPERATOR_PASSWORD
+        sync: false
+      - key: DB_HOST
+        fromDatabase: {name: cabwatch-java-db, property: host}
+      - key: DB_PORT
+        fromDatabase: {name: cabwatch-java-db, property: port}
+      - key: DB_NAME
+        fromDatabase: {name: cabwatch-java-db, property: database}
+      - key: DB_USER
+        fromDatabase: {name: cabwatch-java-db, property: user}
+      - key: DB_PASSWORD
+        fromDatabase: {name: cabwatch-java-db, property: password}
+      - key: SPRING_DATA_REDIS_URL
+        fromService: {type: keyvalue, name: cabwatch-java-cache, property: connectionString}
+      - key: KAFKA_HOST
+        fromService: {type: pserv, name: cabwatch-java-kafka, property: host}
+      - key: KAFKA_CONCURRENCY
+        value: '3'
+      - key: KAFKA_PARTITIONS
+        value: '12'
+  - type: pserv
+    name: cabwatch-java-kafka
+    runtime: docker
+    region: singapore
+    plan: 1c-2g
+    dockerfilePath: ./deploy/kafka/Dockerfile
+    dockerContext: .
+    autoDeployTrigger: "off"
+    disk:
+      name: cabwatch-java-kafka-data
+      mountPath: /var/lib/kafka/data
+      sizeGB: 10
+  - type: keyvalue
+    name: cabwatch-java-cache
+    region: singapore
+    plan: 256mb
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+databases:
+  - name: cabwatch-java-db
+    region: singapore
+    plan: 0.1c-256mb
+    postgresMajorVersion: '17'
+    databaseName: cabwatch
+    user: cabwatch
+    diskSizeGB: 5
+    ipAllowList: []

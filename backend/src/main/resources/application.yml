@@ -1,0 +1,47 @@
+server:
+  port: ${PORT:8080}
+spring:
+  datasource:
+    url: ${JDBC_DATABASE_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:cabwatch}}
+    username: ${DB_USER:cabwatch}
+    password: ${DB_PASSWORD:local-only}
+  sql.init.mode: always
+  data.redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:${KAFKA_HOST:localhost}:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        delivery.timeout.ms: 10000
+        request.timeout.ms: 5000
+        max.block.ms: 3000
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      max-poll-records: 500
+    listener:
+      ack-mode: record
+      concurrency: ${KAFKA_CONCURRENCY:3}
+management:
+  endpoints.web.exposure.include: health,prometheus
+  endpoint.health.probes.enabled: true
+  metrics:
+    distribution:
+      percentiles-histogram:
+        cabwatch.live.detection.latency: true
+      slo:
+        cabwatch.live.detection.latency: 100ms,500ms,1s,2s,5s,10s
+cabwatch:
+  partitions: ${KAFKA_PARTITIONS:12}
+  replicas: ${KAFKA_REPLICAS:1}
+  stale-ms: 10000
+  warning-ms: 5000
+  operator-password: ${OPERATOR_PASSWORD:}

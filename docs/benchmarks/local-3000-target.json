@@ -1,0 +1,19 @@
+{
+  "at": "2026-11-21T19:23:57.721Z",
+  "targetReadingsPerSecond": 3000,
+  "durationSeconds": 15,
+  "vehicles": 1500,
+  "batchSize": 50,
+  "offered": 43954,
+  "accepted": 19026,
+  "failed": 0,
+  "generatorMissedSlots": 24928,
+  "elapsedIncludingDrain": 15.0930556,
+  "acceptedPerSecond": 1260.5797331058664,
+  "httpBatchAckMilliseconds": {
+    "p50": 709.7422000000006,
+    "p95": 1770.0371000000014,
+    "p99": 1840.4480000000003
+  },
+  "note": "HTTP acknowledgment latency is not alert latency. See Prometheus detection histogram; it includes all runs since server startup. Test longer steady load, bursts, restarts and recovery before claiming capacity."
+}

@@ -1,57 +1,72 @@
-# CabWatch
+# CabWatch Java
 
-CabWatch is a simulated fleet dispatch and route-monitoring dashboard built with FastAPI and PostgreSQL. The browser acts as the GPS device on a fictional A–Z road network; no real vehicles or locations are tracked.
+A separate Java/Spring Boot and React migration of [CabWatch](https://github.com/vermavaibhav23/CabWatch), based on original commit a47f8530eca3577294e4b90b281133cc5a5fe342. The original repository and its running service are not modified. Original Python sources are retained in `legacy-python/` for comparison, not executed by the new service.
 
-## Start a trip
+## Architecture
 
-Sign in, choose **Add trip**, then select a pickup and drop-off on the map. FastAPI assigns a simulated plate and finds the shortest road route with Dijkstra. The cab appears at pickup, starts moving, and finishes at drop-off. Each simultaneous ride gets its own cab. An idle cab can be reused for a later trip.
+```mermaid
+flowchart LR
+ JS[JavaScript vehicle simulator] --> API[Spring Boot ingestion]
+ API -->|key = trip / vehicle ID; acks=all| K[Kafka: 12 partitions]
+ K --> L[Live consumer group]
+ K --> H[History consumer group]
+ L --> R[Redis: latest state]
+ H --> P[PostgreSQL: every unique reading]
+ R --> D[React dashboard via 1s state refresh]
+```
 
-**Change route** queues a random turn at the next junction. The cab can take any connected road except the planned next road when an alternative exists, including turning back at a junction. **Return to route** cancels a queued turn. During a detour, Return reverses the cab along its current road and retraces every visited junction to the original turn, including loops. Crossing the planned route while wandering clears the alert below 200 metres; reaching 200 metres again opens a new incident. Refreshing the dashboard restores saved trips and alerts. Press **Start** to resume.
+Each simulated trip represents a distinct active vehicle. The vehicle simulator, road graph, Dijkstra routing, detour and return behavior derive from the Python project. The dashboard renders confirmed consumer state, not the simulator's optimistic position.
 
-## One GPS reading
+## Freshness and recovery
 
-1. The browser moves each simulated cab, timestamps the point, and posts the current batch to `/cab-watch/me/gps`. Hover over a cab for the age of the displayed point.
-2. FastAPI locks the signed-in manager’s trips in a stable order. Each newer sequence is checked against its planned route. A distance of at least 200 m opens an incident; a newer point below 200 m closes it.
-3. Latest coordinates, capture time, trip state, trip completion and alert changes commit in one database transaction before the response. Duplicate and older sequences cannot rewind the cab or clear a newer alert.
-4. The dashboard applies alert updates directly from the GPS response, after the transaction commits. It does not poll for alerts. Dashboard loading restores saved positions and alerts, including the last known position of older trips; any pending GPS from the same tab is replayed first.
+Live detection uses cached routes, a Redis bulk read and pipelined atomic writes, not a PostgreSQL query or Redis round trip for every point. Readings over 10 seconds old are acknowledged by the live group without route evaluation. They mark the vehicle DELAYED, clear the consecutive-reading counter and cannot overwrite the last fresh coordinates. The independent history group stores them normally. After recovery, three consecutive fresh off-route readings are needed to confirm a deviation. Missing sequences, reversed timestamps and long time gaps reset confirmation. Duplicate sequences never rewind state. An idle vehicle is also displayed as delayed after 10 seconds without fresh telemetry.
 
-### Dashboard update limitation
+This implementation drains stale records cheaply rather than seeking to the partition end, which could discard the only reading for quieter vehicles. Redis adds network overhead; skipping stale data is not a guarantee of bounded recovery during sustained overload. Kafka retains history for its configured broker retention, not indefinitely. Provision retention/disk capacity for the largest supported history outage.
 
-Only the browser sending GPS receives its acknowledgement and alert update. Other tabs and separate monitoring clients do not automatically see those changes; refreshing loads the saved state. A future deployment with real vehicle devices or multiple monitoring clients needs an independent dashboard update channel, such as authenticated polling or server-sent events (SSE).
+The consumer groups have independent offsets; a history database outage does not directly stop live processing. Both listeners currently run in one JVM and share host resources. Separate deployments are the next isolation step before production. Partitions bound consumer parallelism; default concurrency is 3 per group, with 12 partitions. Redis sequence comparison protects against late writers after rebalances. Redis failure intentionally stops live acknowledgments; restoration replays data and rechecks freshness.
 
-## Data retention
+## Run
 
-New GPS samples update the trip in place. Existing GPS history is preserved on upgrade. Completed trips and their alerts expire after 90 days by default. Configure TRIP_RETENTION_DAYS and RETENTION_INTERVAL_HOURS to adjust cleanup.
-
-## Run locally
-
-Install Docker with Docker Compose. From the repository root:
+Set a private `OPERATOR_PASSWORD` of at least 16 characters, then:
 
 ```sh
 docker compose up --build
 ```
 
-Open [the dashboard](http://localhost:18080/cab-watch/). Compose starts FastAPI and PostgreSQL. Optionally set `GEMINI_API_KEY` before starting Compose to enable model-generated explanations.
+Open http://localhost:18081. This is a single-operator demonstration, not a multi-tenant production fleet service. Do not reuse the original app's database. Login issues an eight-hour signed bearer token kept only in React memory. Public deployments require HTTPS. The included localhost infrastructure is not configured for exposure to the internet.
 
-## Tests
+## API
+
+- `POST /api/auth`: obtain a token using the operator password.
+- `GET /api/network`, `POST /api/trips`, `POST /api/trips/{id}/complete`.
+- `POST /api/telemetry` or `/api/telemetry/batch` (up to 500 readings).
+- `GET /api/state`, `/api/alerts`, `/api/trips/{id}/history?after=sequence`.
+- Authenticated `/actuator/prometheus` for metrics.
+
+HTTP 202 means Kafka acknowledged the reading, not that detection or history storage
+has finished. Retry a failed send using the same event ID and sequence. The JavaScript
+simulator saves its outbox before sending and only clears it after acknowledgment.
+
+## Test
 
 ```sh
-python -m unittest -v test_cab_watch test_retention test_telemetry
-node --test test_motion.mjs test_telemetry.mjs
+mvn -f backend/pom.xml verify
+cd frontend
+npm ci
+npm test
+npm run build
 ```
 
-Set `CABWATCH_TEST_DATABASE_URL` to a test PostgreSQL database and run `python -m unittest -v test_schema` to verify fresh installation, migration, rollback and ownership constraints in isolated temporary schemas. Set `CABWATCH_TEST_URL` to a running test instance's `/cab-watch` URL to run `test_account_flow`, including concurrent dispatch retries and account isolation.
+## Observability
 
-### Trip API
+Authenticated `/actuator/prometheus` exports Kafka client metrics, stale/duplicate counts, reading age and detection latency. Normal target is under 2 seconds, warning threshold is 5 seconds, stale cutoff is 10 seconds. These are design targets, not benchmark results or guarantees. Clock synchronization is necessary for end-to-end measurements. State transitions and idempotency are tested separately from infrastructure throughput.
 
-Send `POST /cab-watch/me/trips` with a bearer token, a UUID `Idempotency-Key` header, and a body such as `{"pickup":"G","dropoff":"K"}`. A new ride returns 201 with a trip UUID, cab plate and ordered route. Repeating the request returns 200 with the same trip. Reusing the key with different stops returns 409.
+## Scope and differences
 
-`GET /cab-watch/me/trips` restores the account's trips, alerts and route deviation threshold. New rides store one customer route. On upgrade, older rides approaching pickup start at pickup. Rides carrying a passenger keep their progress. A ride already returning to a depot is complete and its cab becomes available. Reload an older open dashboard to use the updated GPS format.
+The migration currently provides a single protected operator dashboard. Original signup/accounts, optional Gemini explanations and automatic retention cleanup remain in the legacy source; this edition uses operator login, deterministic explanations and preserves history until explicitly managed. Simulator motion and retry outboxes are saved locally across refreshes. React uses 1-second authenticated polling for processed state, not WebSocket; this polling does not accelerate the Kafka consumer. Multi-tenant authorization and production quotas are outside this operator-demo scope. Recent alert events are stored atomically with state in Redis and are capped at 200; PostgreSQL contains the complete telemetry history.
 
-### Ordered telemetry
+## Render
 
-Each active trip accepts any sequence greater than its last saved sequence. A missing reading does not delay newer positions or other trips in the batch. Late and duplicate readings return the current receipt and latest incident without changing the saved position or alert.
+The validated `render.yaml` creates a new web service, private Kafka broker, Redis and PostgreSQL. It does not reference the original CabWatch resources. This configuration incurs recurring charges and must be reviewed in Render before provisioning. Supply `OPERATOR_PASSWORD` when prompted. No live Render URL is claimed until deployment and health checks succeed.
 
-The browser saves up to two unacknowledged batches in account-scoped session storage before drawing their movement. It replays them in order after a refresh in the same tab. It uploads each batch in chunks of at most 25 readings so large fleets share processing time. It automatically retries network failures, 429 and temporary server failures with bounded exponential backoff. Simulation movement waits when the buffer is full. Closing the tab ends this simulator's session storage.
-
-Each server worker admits two telemetry transactions at a time, with one active or waiting batch per account and up to 32 FIFO waiters. Waiting admission is limited to two seconds, database connection acquisition to two seconds, and processing to ten seconds. Overload returns retry guidance. A database advisory lock additionally prevents simultaneous telemetry transactions for the same account across workers. These bounds control resource use and give waiting accounts access in order within a worker. They do not establish a measured fleet-capacity or latency guarantee.
+See [operations and deployment notes](docs/operations.md) and [measured validation results](docs/validation.md).

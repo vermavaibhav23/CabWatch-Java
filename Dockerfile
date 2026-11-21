@@ -1,7 +1,20 @@
-FROM python:3.13-slim
+FROM node:22-alpine AS ui
+WORKDIR /ui
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+FROM maven:3.9.11-eclipse-temurin-17 AS build
+WORKDIR /build
+COPY backend/pom.xml ./
+RUN mvn -B dependency:go-offline
+COPY backend/src ./src
+COPY --from=ui /ui/dist ./src/main/resources/static
+RUN mvn -B verify
+FROM eclipse-temurin:17-jre
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY main.py .
-COPY cab_watch ./cab_watch
-CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+RUN useradd --system --uid 10001 app
+COPY --from=build /build/target/cabwatch-1.0.0.jar app.jar
+USER app
+EXPOSE 8080
+ENTRYPOINT ["java","-XX:MaxRAMPercentage=70","-jar","app.jar"]
