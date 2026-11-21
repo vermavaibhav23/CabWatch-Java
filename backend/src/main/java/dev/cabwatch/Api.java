@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
+import java.security.Principal;
 import java.util.*;
 import java.util.concurrent.*;
 import org.springframework.http.*;
@@ -28,8 +29,8 @@ public class Api {
   }
 
   @GetMapping("/alerts")
-  public Object alerts() throws Exception {
-    return pipeline.alerts();
+  public Object alerts(Principal user) throws Exception {
+    return pipeline.alerts(user.getName());
   }
 
   @GetMapping("/network")
@@ -38,34 +39,37 @@ public class Api {
   }
 
   @GetMapping("/trips")
-  public Object list() {
-    return trips.all();
+  public Object list(Principal user) {
+    return trips.all(user.getName());
   }
 
   @PostMapping("/trips/{id}/complete")
-  public Object complete(@PathVariable UUID id) {
+  public Object complete(@PathVariable UUID id, Principal user) {
+    trips.owned(id, user.getName());
     return trips.complete(id);
   }
 
   @GetMapping("/trips/{id}/history")
-  public Object history(@PathVariable UUID id, @RequestParam(defaultValue = "0") long after) {
+  public Object history(
+      @PathVariable UUID id, @RequestParam(defaultValue = "0") long after, Principal user) {
+    trips.owned(id, user.getName());
     return trips.history(id, Math.max(0, after));
   }
 
   public record Dispatch(UUID id, String pickup, String dropoff) {}
 
   @PostMapping("/trips")
-  public Object create(@RequestBody Dispatch d) {
-    return trips.create(Objects.requireNonNull(d.id()), d.pickup(), d.dropoff());
+  public Object create(@RequestBody Dispatch d, Principal user) {
+    return trips.create(Objects.requireNonNull(d.id()), d.pickup(), d.dropoff(), user.getName());
   }
 
   @PostMapping("/telemetry")
-  public ResponseEntity<?> ingest(@Valid @RequestBody Reading r) throws Exception {
+  public ResponseEntity<?> ingest(@Valid @RequestBody Reading r, Principal user) throws Exception {
     if (!Double.isFinite(r.x())
         || !Double.isFinite(r.y())
         || r.capturedAt() > System.currentTimeMillis() + 2000)
       throw new IllegalArgumentException("Invalid coordinates or future capture time");
-    trips.get(r.tripId()); // Cached after first access, no SQL on steady-state ingestion/detection.
+    trips.owned(r.tripId(), user.getName()); // Cached ownership; no SQL per steady-state reading.
     kafka
         .send(Pipeline.TOPIC, r.tripId().toString(), json.writeValueAsString(r))
         .get(12, TimeUnit.SECONDS);
@@ -76,7 +80,8 @@ public class Api {
   public record TelemetryBatch(@NotEmpty @Size(max = 500) List<@Valid Reading> readings) {}
 
   @PostMapping("/telemetry/batch")
-  public ResponseEntity<?> ingestBatch(@Valid @RequestBody TelemetryBatch batch) throws Exception {
+  public ResponseEntity<?> ingestBatch(@Valid @RequestBody TelemetryBatch batch, Principal user)
+      throws Exception {
     // Validate the entire batch before publishing any event. Partial broker acknowledgments can
     // still occur, so a retry must preserve every event ID and sequence in the original batch.
     for (var r : batch.readings()) {
@@ -84,7 +89,7 @@ public class Api {
           || !Double.isFinite(r.y())
           || r.capturedAt() > System.currentTimeMillis() + 2000)
         throw new IllegalArgumentException("Invalid reading");
-      trips.get(r.tripId());
+      trips.owned(r.tripId(), user.getName());
     }
     List<CompletableFuture<?>> sends = new ArrayList<>();
     for (var r : batch.readings())
@@ -95,10 +100,10 @@ public class Api {
   }
 
   @GetMapping("/state")
-  public Object state() throws Exception {
+  public Object state(Principal user) throws Exception {
     List<Object> result = new ArrayList<>();
     long now = System.currentTimeMillis();
-    var all = trips.all();
+    var all = trips.all(user.getName());
     var states = pipeline.states(all.stream().map(Trips.Trip::id).toList());
     for (var t : all) {
       var s = states.get(t.id());

@@ -16,8 +16,12 @@ replication factor 3, minimum in-sync replicas 2, authenticated TLS and tested b
 
 Set a random OPERATOR_PASSWORD of at least 16 characters. Never commit it. The
 login issues an eight-hour signed bearer token kept only in browser memory. Changing
-the password invalidates all existing tokens. The dashboard is a single-operator
-demo; separate customer accounts and tenant authorization are not implemented.
+the password invalidates all existing tokens, including account tokens. Accounts
+can register and sign in; trips, telemetry and alerts are scoped to their owner.
+Operator login has its own separate fleet and is the only role permitted to read
+metrics. Registration is for this demonstration; before exposing it widely, add
+email verification, password reset, distributed rate limits and per-account quotas.
+The current authentication limiter permits 30 attempts/minute per process.
 
 ## Freshness behavior
 
@@ -36,7 +40,7 @@ demo; separate customer accounts and tenant authorization are not implemented.
   processed state, not raw vehicle positions.
 
 Recent alert transitions and their matching state are written atomically to Redis.
-The last 200 alert events are retained for the UI; these are not an indefinite
+The last 200 alert events per account are retained for the UI; these are not an indefinite
 audit log. PostgreSQL is the full telemetry record, including stale/out-of-order
 samples. Retries of an event or trip/sequence do not create duplicate history rows.
 Exactly-once delivery is not claimed. Kafka offset commits happen after successful

@@ -26,8 +26,8 @@ public class Pipeline {
               + " cjson.decode(old).sequence>=tonumber(ARGV[1]) then return 0 end;"
               + " redis.call('SET',KEYS[1],ARGV[2],'EX',86400); local events=cjson.decode(ARGV[3]);"
               + " for _,event in ipairs(events) do"
-              + " redis.call('LPUSH','cabwatch:alerts',cjson.encode(event)) end;"
-              + " redis.call('LTRIM','cabwatch:alerts',0,199); return 1",
+              + " redis.call('LPUSH',KEYS[2],cjson.encode(event)) end;"
+              + " redis.call('LTRIM',KEYS[2],0,199); return 1",
           Long.class);
   private final ObjectMapper json;
   private final Trips trips;
@@ -151,6 +151,11 @@ public class Pipeline {
       commands.add(
           new byte[][] {
             bytes("live:" + e.getKey()),
+            // Only alerts need an owner lookup (already cached while computing their route).
+            bytes(
+                events.isEmpty()
+                    ? "cabwatch:no-alerts"
+                    : "cabwatch:alerts:" + trips.get(e.getKey()).owner()),
             bytes(Long.toString(s.sequence())),
             bytes(json.writeValueAsString(s)),
             bytes(json.writeValueAsString(events))
@@ -163,7 +168,7 @@ public class Pipeline {
                   for (var args : commands)
                     connection
                         .scriptingCommands()
-                        .eval(bytes(SAVE.getScriptAsString()), ReturnType.INTEGER, 1, args);
+                        .eval(bytes(SAVE.getScriptAsString()), ReturnType.INTEGER, 2, args);
                   return null;
                 });
     long published = System.currentTimeMillis();
@@ -187,9 +192,9 @@ public class Pipeline {
     return value.getBytes(StandardCharsets.UTF_8);
   }
 
-  public List<Object> alerts() throws Exception {
+  public List<Object> alerts(String owner) throws Exception {
     var result = new ArrayList<Object>();
-    var values = redis.opsForList().range("cabwatch:alerts", 0, 99);
+    var values = redis.opsForList().range("cabwatch:alerts:" + owner, 0, 99);
     if (values != null) for (var value : values) result.add(json.readValue(value, Map.class));
     return result;
   }

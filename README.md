@@ -33,11 +33,12 @@ Set a private `OPERATOR_PASSWORD` of at least 16 characters, then:
 docker compose up --build
 ```
 
-Open http://localhost:18081. This is a single-operator demonstration, not a multi-tenant production fleet service. Do not reuse the original app's database. Login issues an eight-hour signed bearer token kept only in React memory. Public deployments require HTTPS. The included localhost infrastructure is not configured for exposure to the internet.
+Open http://localhost:18081 and create an account. Each account has its own trips, telemetry and alerts. Do not reuse the original app's database. Login issues an eight-hour signed bearer token kept only in React memory. Operator access uses the environment password and has a separate fleet plus metrics access; it cannot read other accounts' fleets. Public deployments require HTTPS. The included localhost infrastructure is not configured for exposure to the internet.
 
 ## API
 
-- `POST /api/auth`: obtain a token using the operator password.
+- `POST /api/auth/register` and `/api/auth/login`: create an account or sign in.
+- `POST /api/auth`: obtain an operator token for the operator fleet and metrics.
 - `GET /api/network`, `POST /api/trips`, `POST /api/trips/{id}/complete`.
 - `POST /api/telemetry` or `/api/telemetry/batch` (up to 500 readings).
 - `GET /api/state`, `/api/alerts`, `/api/trips/{id}/history?after=sequence`.
@@ -63,7 +64,7 @@ Authenticated `/actuator/prometheus` exports Kafka client metrics, stale/duplica
 
 ## Scope and differences
 
-The migration currently provides a single protected operator dashboard. Original signup/accounts, optional Gemini explanations and automatic retention cleanup remain in the legacy source; this edition uses operator login, deterministic explanations and preserves history until explicitly managed. Simulator motion and retry outboxes are saved locally across refreshes. React uses 1-second authenticated polling for processed state, not WebSocket; this polling does not accelerate the Kafka consumer. Multi-tenant authorization and production quotas are outside this operator-demo scope. Recent alert events are stored atomically with state in Redis and are capped at 200; PostgreSQL contains the complete telemetry history.
+The migration includes signup, login and account-scoped fleets. Passwords are BCrypt hashed, ownership is checked on every trip read/write/ingestion endpoint, alerts are stored per account, and metrics require operator access. Authentication is limited to 30 attempts/minute per process. Email verification, password reset, distributed rate limits, resource quotas and production account administration are not implemented. Optional Gemini explanations and automatic retention cleanup remain in the legacy source; this edition uses deterministic explanations and preserves history until explicitly managed. Simulator motion and retry outboxes are saved locally across refreshes. React uses 1-second authenticated polling for processed state, not WebSocket; this polling does not accelerate the Kafka consumer. Recent alert events are stored atomically with state in Redis and are capped at 200 per account; PostgreSQL contains the complete telemetry history.
 
 ## Render
 

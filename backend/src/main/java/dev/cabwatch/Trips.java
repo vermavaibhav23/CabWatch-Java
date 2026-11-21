@@ -8,7 +8,12 @@ import org.springframework.stereotype.Service;
 @Service
 public class Trips {
   public record Trip(
-      UUID id, String pickup, String dropoff, List<String> route, boolean completed) {}
+      UUID id,
+      String pickup,
+      String dropoff,
+      List<String> route,
+      boolean completed,
+      String owner) {}
 
   private final JdbcTemplate db;
   private final City city;
@@ -31,8 +36,23 @@ public class Trips {
                         rs.getString("pickup"),
                         rs.getString("dropoff"),
                         city.route(rs.getString("pickup"), rs.getString("dropoff")),
-                        rs.getBoolean("completed")),
+                        rs.getBoolean("completed"),
+                        rs.getString("owner_id")),
                 id));
+  }
+
+  public Trip owned(UUID id, String owner) {
+    Trip t;
+    try {
+      t = get(id);
+    } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+      throw new org.springframework.web.server.ResponseStatusException(
+          org.springframework.http.HttpStatus.NOT_FOUND);
+    }
+    if (!t.owner().equals(owner))
+      throw new org.springframework.web.server.ResponseStatusException(
+          org.springframework.http.HttpStatus.NOT_FOUND);
+    return t;
   }
 
   public Trip complete(UUID id) {
@@ -51,22 +71,24 @@ public class Trips {
         after);
   }
 
-  public Trip create(UUID id, String start, String end) {
+  public Trip create(UUID id, String start, String end, String owner) {
     city.route(start, end);
     db.update(
-        "insert into trips(id,pickup,dropoff) values (?,?,?) on conflict do nothing",
+        "insert into trips(id,pickup,dropoff,owner_id) values (?,?,?,?) on conflict do nothing",
         id,
         start,
-        end);
-    Trip t = get(id);
+        end,
+        owner);
+    Trip t = owned(id, owner);
     if (!t.pickup.equals(start) || !t.dropoff.equals(end))
       throw new IllegalArgumentException("Trip ID already used for different stops");
     return t;
   }
 
-  public List<Trip> all() {
+  public List<Trip> all(String owner) {
     return db.query(
-        "select id from trips order by created_at desc limit 500",
-        (rs, n) -> get(rs.getObject(1, UUID.class)));
+        "select id from trips where owner_id=? order by created_at desc limit 500",
+        (rs, n) -> get(rs.getObject(1, UUID.class)),
+        owner);
   }
 }

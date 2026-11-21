@@ -14,11 +14,15 @@ These measurements describe the local Windows/Docker test environment, not Rende
   already cached trip. History caught up after the database restarted.
 - Batched transitions retain a brief confirmed alert even when later samples in the
   same batch return to the planned route.
+- Account regression checks cover signup, login, duplicate emails, incorrect
+  passwords, private fleet lists/history/alerts, cross-account writes, atomic
+  rejection of a mixed-owner batch, and operator-only access to metrics.
 - Render Blueprint validated against Render's published JSON schema.
 
 ## Capacity result
 
 A bounded 15-second run targeted 3,000 readings/second across 1,500 simulated vehicles.
+This benchmark was captured at commit `ab9ae5d`, before the subsequent account-isolation change.
 It accepted 19,026 readings with zero HTTP failures, about 1,261/second including
 acknowledgment drain. The generator missed 24,928 scheduled slots. This **does not
 establish** the requested 2,000/second capacity or spare headroom. HTTP acknowledgment

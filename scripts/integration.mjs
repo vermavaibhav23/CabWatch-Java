@@ -37,8 +37,39 @@ const docker = (...args) =>
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 token = (await request("auth", { password })).token;
+const operatorToken = token;
 assert.equal((await fetch(base + "/api/state")).status, 401);
 assert.equal((await fetch(base + "/actuator/prometheus")).status, 401);
+const account = {
+  name: "Integration User",
+  email: randomUUID() + "@example.test",
+  password: "integration-account-password",
+};
+token = (await request("auth/register", account, 201)).token;
+await request("auth/register", account, 409);
+await request(
+  "auth/login",
+  { email: account.email, password: "incorrect-password" },
+  401,
+);
+token = (await request("auth/login", account)).token;
+const accountToken = token;
+assert.equal(
+  (
+    await fetch(base + "/actuator/prometheus", {
+      headers: { Authorization: "Bearer " + token },
+    })
+  ).status,
+  403,
+);
+assert.equal(
+  (
+    await fetch(base + "/actuator/prometheus", {
+      headers: { Authorization: "Bearer " + operatorToken },
+    })
+  ).status,
+  200,
+);
 const id = randomUUID();
 await request("trips", { id, pickup: "A", dropoff: "Z" });
 const reading = (sequence, time = Date.now(), x = 1400, y = 1400) => ({
@@ -52,6 +83,33 @@ const reading = (sequence, time = Date.now(), x = 1400, y = 1400) => ({
 const state = async () =>
   (await request("state")).find((r) => r.trip.id === id);
 const send = async (r) => request("telemetry", r, 202);
+token = (
+  await request(
+    "auth/register",
+    { ...account, email: randomUUID() + "@example.test" },
+    201,
+  )
+).token;
+assert.deepEqual(await request("trips"), []);
+assert.deepEqual(await request("state"), []);
+await request("trips/" + id + "/history", undefined, 404);
+await request("trips/" + id + "/complete", {}, 404);
+await request("trips", { id, pickup: "A", dropoff: "Z" }, 404);
+await request("telemetry", reading(1), 404);
+const ownId = randomUUID();
+await request("trips", { id: ownId, pickup: "A", dropoff: "Z" });
+await request(
+  "telemetry/batch",
+  { readings: [{ ...reading(1), tripId: ownId }, reading(1)] },
+  404,
+);
+await new Promise((r) => setTimeout(r, 300));
+assert.deepEqual(await request("trips/" + ownId + "/history"), []);
+const otherToken = token;
+token = accountToken;
+console.log(
+  "PASS: account registration, login, private fleets, mixed-batch rejection and restricted metrics",
+);
 const waitSequence = (n) =>
   eventually(
     async () => (await state()).state.sequence === n,
@@ -120,15 +178,40 @@ if (process.env.OUTAGE_TEST === "1") {
   console.log("PASS: history recovers every sample after database restart");
 }
 // Several transitions in one Kafka poll must retain a brief confirmed alert.
-const now=Date.now();
-const network=await request('network');
-const [x,y]=network.nodes.A;
-await request('telemetry/batch',{readings:[reading(11,now-300000),reading(12,now),reading(13,now+1),reading(14,now+2),reading(15,now+3,x,y),reading(16,now+4)]},202);
+const now = Date.now();
+const network = await request("network");
+const [x, y] = network.nodes.A;
+await request(
+  "telemetry/batch",
+  {
+    readings: [
+      reading(11, now - 300000),
+      reading(12, now),
+      reading(13, now + 1),
+      reading(14, now + 2),
+      reading(15, now + 3, x, y),
+      reading(16, now + 4),
+    ],
+  },
+  202,
+);
 await waitSequence(16);
-assert.equal((await state()).state.offRoute,false);
-await eventually(async()=> (await request('alerts')).some(a=>a.tripId===id && a.sequence===14),'brief batch alert retained');
-await eventually(async()=> (await request('trips/'+id+'/history')).length===(process.env.OUTAGE_TEST==='1'?16:15),'batch history complete');
-console.log('PASS: batched ingestion and transient alert retention');
+assert.equal((await state()).state.offRoute, false);
+await eventually(
+  async () =>
+    (await request("alerts")).some((a) => a.tripId === id && a.sequence === 14),
+  "brief batch alert retained",
+);
+token = otherToken;
+assert.deepEqual(await request("alerts"), []);
+token = accountToken;
+await eventually(
+  async () =>
+    (await request("trips/" + id + "/history")).length ===
+    (process.env.OUTAGE_TEST === "1" ? 16 : 15),
+  "batch history complete",
+);
+console.log("PASS: batched ingestion and transient alert retention");
 await request("trips/" + id + "/complete", {});
 assert.equal((await state()).trip.completed, true);
 console.log("PASS: trip completion");

@@ -10,6 +10,9 @@ import {
 import "./style.css";
 function App() {
   const [password, setPassword] = useState(""),
+    [email, setEmail] = useState(""),
+    [name, setName] = useState(""),
+    [loginMode, setLoginMode] = useState("login"),
     [auth, setAuth] = useState(""),
     [network, setNetwork] = useState(null),
     [rows, setRows] = useState([]),
@@ -52,7 +55,7 @@ function App() {
     };
   }, [auth]);
   useEffect(() => {
-    if (!network) return;
+    if (!network || !auth) return;
     let alive = true;
     const refresh = async () => {
       try {
@@ -161,12 +164,22 @@ function App() {
   async function login(e) {
     e.preventDefault();
     try {
-      const r = await fetch("/api/auth", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
-      });
-      if (!r.ok) throw Error("Login failed. Check your password.");
+      const r = await fetch(
+        loginMode === "operator" ? "/api/auth" : "/api/auth/" + loginMode,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password, email, name }),
+        },
+      );
+      if (!r.ok)
+        throw Error(
+          r.status === 409
+            ? "This email is already registered. Sign in instead."
+            : r.status === 429
+              ? "Too many attempts. Please try again in a minute."
+              : "Could not sign in or create an account. Check your details and password length (10 to 72 bytes).",
+        );
       setAuth((await r.json()).token);
       setPassword("");
       setError("");
@@ -189,15 +202,60 @@ function App() {
         {error && <p role="alert">{error}</p>}
         <form onSubmit={login}>
           <label>
-            Operator password
+            Account access
+            <select
+              value={loginMode}
+              onChange={(e) => setLoginMode(e.target.value)}
+            >
+              <option value="login">Sign in</option>
+              <option value="register">Create account</option>
+              <option value="operator">Operator access</option>
+            </select>
+          </label>
+          {loginMode === "register" && (
+            <label>
+              Name
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                maxLength={80}
+                autoComplete="name"
+                required
+              />
+            </label>
+          )}
+          {loginMode !== "operator" && (
+            <label>
+              Email
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                maxLength={254}
+                autoComplete="email"
+                required
+              />
+            </label>
+          )}
+          <label>
+            Password
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              minLength={loginMode === "operator" ? 16 : 10}
+              maxLength={72}
+              autoComplete={
+                loginMode === "register" ? "new-password" : "current-password"
+              }
               required
             />
           </label>
-          <button>Open dashboard</button>
+          <button>
+            {loginMode === "register"
+              ? "Create private fleet"
+              : "Open dashboard"}
+          </button>
         </form>
       </main>
     );
@@ -213,9 +271,26 @@ function App() {
             CabWatch <span>Java edition</span>
           </h1>
         </div>
-        <button onClick={() => setRunning(!running)}>
-          {running ? "Pause simulator" : "Start simulator"}
-        </button>
+        <div>
+          <button onClick={() => setRunning(!running)}>
+            {running ? "Pause simulator" : "Start simulator"}
+          </button>
+          <button
+            onClick={() => {
+              setRunning(false);
+              setAuth("");
+              setNetwork(null);
+              setRows([]);
+              setAlerts([]);
+              setHistory(null);
+              setError("");
+              cabs.current.clear();
+              pending.current.clear();
+            }}
+          >
+            Sign out
+          </button>
+        </div>
       </header>
       {error && (
         <p role="alert" className="error">
